@@ -552,6 +552,8 @@ multi_ProcessUtility(PlannedStmt *pstmt,
 				{
 					Assert(list_length(commandList) == 1);
 					ErrorIfUnsupportedAlterAddConstraintStmt(alterTableStatement);
+
+					CitusInvalidateRelcacheByRelid(DistColocationRelationId());
 				}
 			}
 		}
@@ -2227,8 +2229,13 @@ ErrorIfUnsupportedAlterTableStmt(AlterTableStmt *alterTableStatement)
 			}
 
 #endif
-			case AT_SetNotNull:
 			case AT_DropConstraint:
+			{
+				CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+				break;
+			}
+
+			case AT_SetNotNull:
 			case AT_EnableTrigAll:
 			case AT_DisableTrigAll:
 			case AT_ReplicaIdentity:

@@ -776,6 +776,11 @@ EnsureRelationCanBeDistributed(Oid relationId, Var *distributionColumn,
 	ErrorIfUnsupportedConstraint(relation, distributionMethod, distributionColumn,
 								 colocationId);
 
+	if (TableReferenced(relationId) || TableReferencing(relationId))
+	{
+		CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+	}
+
 	relation_close(relation, NoLock);
 }
 

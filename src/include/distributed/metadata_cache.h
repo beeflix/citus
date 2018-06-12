@@ -69,6 +69,19 @@ typedef struct
 	FmgrInfo *shardIntervalCompareFunction;
 	FmgrInfo *hashFunction; /* NULL if table is not distributed by hash */
 
+	/*
+	 * The following two lists consists of relationIds that this distributed
+	 * relation has a foreign key to (e.g., referencedRelationsViaForeignKey) or
+	 * other relations has a foreign key to to this relation (e.g.,
+	 * referencingRelationsViaForeignKey).
+	 *
+	 * Note that we're keeping all transitive foreign key references as well
+	 * such that if relation A refers to B, and B refers to C, we keep A and B
+	 * in C's referencingRelationsViaForeignKey.
+	 */
+	List *referencedRelationsViaForeignKey;
+	List *referencingRelationsViaForeignKey;
+
 	/* pg_dist_placement metadata */
 	GroupShardPlacement **arrayOfPlacementArrays;
 	int *arrayOfPlacementArrayLengths;
