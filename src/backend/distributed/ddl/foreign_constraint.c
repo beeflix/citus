@@ -11,6 +11,7 @@
  */
 
 #include "postgres.h"
+#include "funcapi.h"
 
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
@@ -21,12 +22,589 @@
 #include "distributed/foreign_constraint.h"
 #include "distributed/master_protocol.h"
 #include "distributed/multi_join_order.h"
+#include "nodes/pg_list.h"
+#include "utils/catcache.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "utils/lsyscache.h"
+
+typedef struct FRelGraph
+{
+	HTAB *nodeMap;
+	int nodeCount;
+	bool validGraph;
+	Oid *indexToOidArray;
+	bool **transitivityMatrix;
+}FRelGraph;
+
+typedef struct FRelNode
+{
+	Oid relationId;
+	uint32 index;
+	List *adjacencyList;
+}FRelNode;
+
+static FRelGraph *frelGraph = NULL;
+
+static void CreateForeignKeyRelationGraph(void);
+static void CreateTransitivityMatrix(void);
+static void InitializeIndexToOidMapping(void);
+static List * GetReferencedRelationIdHelper(Oid relationId, bool isAffecting);
+
+/* this function is only exported in the regression tests */
+PG_FUNCTION_INFO_V1(get_referencing_relation_id_list);
+PG_FUNCTION_INFO_V1(get_referenced_relation_id_list);
+
+/*
+ * get_referencing_relation_id_list returns the list of table oids that is referencing
+ * by given oid recursively. It uses the foreign key relation graph if it exists
+ * in the cache, otherwise forms it up once.
+ */
+Datum
+get_referencing_relation_id_list(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *functionContext = NULL;
+	ListCell *foreignRelationCell = NULL;
+
+	CheckCitusVersion(ERROR);
+
+	/* for the first we call this UDF, we need to populate the result to return set */
+	if (SRF_IS_FIRSTCALL())
+	{
+		Oid relationId = PG_GETARG_OID(0);
+		List *refList = ReferencingRelationIdList(relationId);
+
+		/* create a function context for cross-call persistence */
+		functionContext = SRF_FIRSTCALL_INIT();
+
+		foreignRelationCell = list_head(refList);
+		functionContext->user_fctx = foreignRelationCell;
+	}
+
+	/*
+	 * On every call to this function, we get the current position in the
+	 * statement list. We then iterate to the next position in the list and
+	 * return the current statement, if we have not yet reached the end of
+	 * list.
+	 */
+	functionContext = SRF_PERCALL_SETUP();
+
+	foreignRelationCell = (ListCell *) functionContext->user_fctx;
+	if (foreignRelationCell != NULL)
+	{
+		Oid refId = lfirst_oid(foreignRelationCell);
+
+		functionContext->user_fctx = lnext(foreignRelationCell);
+
+		SRF_RETURN_NEXT(functionContext, PointerGetDatum(refId));
+	}
+	else
+	{
+		SRF_RETURN_DONE(functionContext);
+	}
+}
+
+
+/*
+ * get_referenced_relation_id_list returns the list of table oids that is referenced
+ * by given oid recursively. It uses the foreign key relation graph if it exists
+ * in the cache, otherwise forms it up once.
+ */
+Datum
+get_referenced_relation_id_list(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *functionContext = NULL;
+	ListCell *foreignRelationCell = NULL;
+
+	CheckCitusVersion(ERROR);
+
+	/* for the first we call this UDF, we need to populate the result to return set */
+	if (SRF_IS_FIRSTCALL())
+	{
+		Oid relationId = PG_GETARG_OID(0);
+		List *refList = ReferencedRelationIdList(relationId);
+
+		/* create a function context for cross-call persistence */
+		functionContext = SRF_FIRSTCALL_INIT();
+
+		foreignRelationCell = list_head(refList);
+		functionContext->user_fctx = foreignRelationCell;
+	}
+
+	/*
+	 * On every call to this function, we get the current position in the
+	 * statement list. We then iterate to the next position in the list and
+	 * return the current statement, if we have not yet reached the end of
+	 * list.
+	 */
+	functionContext = SRF_PERCALL_SETUP();
+
+	foreignRelationCell = (ListCell *) functionContext->user_fctx;
+	if (foreignRelationCell != NULL)
+	{
+		Oid refId = lfirst_oid(foreignRelationCell);
+
+		functionContext->user_fctx = lnext(foreignRelationCell);
+
+		SRF_RETURN_NEXT(functionContext, PointerGetDatum(refId));
+	}
+	else
+	{
+		SRF_RETURN_DONE(functionContext);
+	}
+}
+
+
+/*
+ * IsForeignKeyGraphValid check whether there is a valid graph.
+ */
+bool
+IsForeignKeyGraphValid()
+{
+	if (frelGraph != NULL && frelGraph->validGraph)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+
+/*
+ * SetForeignKeyGraphInvalid sets the validity of the graph to false.
+ */
+void
+SetForeignKeyGraphInvalid()
+{
+	if (frelGraph != NULL)
+	{
+		frelGraph->validGraph = false;
+	}
+}
+
+
+/*
+ * ConnectedComponentOfRelationId returns the list of Oids which are in the
+ * same connected component with given relation id.
+ */
+List *
+ConnectedComponentOfRelationId(Oid relationId)
+{
+	List *referencedRelationIdList = ReferencedRelationIdList(relationId);
+	List *referencingRelationIdList = ReferencingRelationIdList(relationId);
+	List *connectedComponentOidList = list_concat_unique_oid(referencedRelationIdList,
+															 referencingRelationIdList);
+
+	return connectedComponentOidList;
+}
+
+
+/*
+ * ReferencedRelationIdList is a wrapper function around GetRefenceRelationIdHelper
+ * to get list of relation IDs which are referenced by the given relation id.
+ * Note that, if relation A is referenced by relation B and relation B is referenced
+ * by relation C, then the result list for relation A consists of the relation
+ * IDs of relation B and relation C.
+ */
+List *
+ReferencedRelationIdList(Oid relationId)
+{
+	return GetReferencedRelationIdHelper(relationId, false);
+}
+
+
+/*
+ * ReferencingRelationIdList is a wrapper function around GetRefenceRelationIdHelper
+ * to get list of relation IDs which are referencing by the given relation id.
+ * Note that, if relation A is referenced by relation B and relation B is referenced
+ * by relation C, then the result list for relation C consists of the relation
+ * IDs of relation A and relation B.
+ */
+List *
+ReferencingRelationIdList(Oid relationId)
+{
+	return GetReferencedRelationIdHelper(relationId, true);
+}
+
+
+/*
+ * GetReferencedRelationIdHelper returns the list of oids affected or affecting
+ * given relation id. It uses the transitivity matrix which is computed once in
+ * a session. It is a helper function for providing results to public functions
+ * ReferencedRelationIdList and ReferencingRelationIdList.
+ */
+static List *
+GetReferencedRelationIdHelper(Oid relationId, bool isAffecting)
+{
+	List *foreignKeyList = NIL;
+	bool isFound = false;
+	FRelNode *relationNode = NULL;
+	uint32 relationIndex = -1;
+	MemoryContext oldContext = MemoryContextSwitchTo(CacheMemoryContext);
+
+	CreateForeignKeyRelationGraph();
+	relationNode = (FRelNode *) hash_search(frelGraph->nodeMap, &relationId,
+											HASH_FIND, &isFound);
+	if (!isFound)
+	{
+		/*
+		 * If there is no node with the given relation id, that means given table
+		 * does not referencing and does not referenced by any table
+		 */
+		MemoryContextSwitchTo(oldContext);
+		return NIL;
+	}
+	else
+	{
+		/*
+		 * Create the returning list according to the direction of reference. We
+		 * utilize indexes of each relation node (which has relation id as an
+		 * attribute) to get result from transitivity matrix easily.
+		 */
+		relationIndex = relationNode->index;
+		if (isAffecting)
+		{
+			uint32 tableCounter = 0;
+
+			while (tableCounter < frelGraph->nodeCount)
+			{
+				if (frelGraph->transitivityMatrix[relationIndex][tableCounter])
+				{
+					Oid referredTableOid = frelGraph->indexToOidArray[tableCounter];
+					foreignKeyList = lappend_oid(foreignKeyList, referredTableOid);
+				}
+
+				tableCounter += 1;
+			}
+		}
+		else
+		{
+			uint32 tableCounter = 0;
+
+			while (tableCounter < frelGraph->nodeCount)
+			{
+				if (frelGraph->transitivityMatrix[tableCounter][relationIndex])
+				{
+					Oid referringTableOid = frelGraph->indexToOidArray[tableCounter];
+					foreignKeyList = lappend_oid(foreignKeyList, referringTableOid);
+				}
+
+				tableCounter += 1;
+			}
+		}
+	}
+
+	MemoryContextSwitchTo(oldContext);
+
+	return foreignKeyList;
+}
+
+
+/*
+ * CreateForeignKeyRelationGraph creates the foreign key relation graph using
+ * foreign constraint provided by pg_constraint metadata table.
+ */
+static void
+CreateForeignKeyRelationGraph()
+{
+	SysScanDesc fkeyScan;
+	HeapTuple tuple;
+	HASHCTL info;
+	uint32 hashFlags = 0;
+	Relation fkeyRel;
+	int curIndex = 0;
+
+	/* if we have already created the graph, use it */
+	if (IsForeignKeyGraphValid())
+	{
+		return;
+	}
+	else
+	{
+		ClearForeignKeyRelationGraph();
+		frelGraph = (FRelGraph *) palloc(sizeof(FRelGraph));
+		frelGraph->validGraph = false;
+
+		/* create (oid) -> [FRelNode] hash */
+		memset(&info, 0, sizeof(info));
+		info.keysize = sizeof(Oid);
+		info.entrysize = sizeof(FRelNode);
+		info.hash = oid_hash;
+		info.hcxt = CurrentMemoryContext;
+		hashFlags = (HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
+
+		frelGraph->nodeMap = hash_create("foreign key relation map (oid)",
+										 64 * 32, &info, hashFlags);
+	}
+
+	fkeyRel = heap_open(ConstraintRelationId, AccessShareLock);
+	fkeyScan = systable_beginscan(fkeyRel, ConstraintRelidIndexId, true,
+								  NULL, 0, NULL);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(fkeyScan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(tuple);
+		bool referringFound = false;
+		bool referredFound = false;
+		FRelNode *referringNode = NULL;
+		FRelNode *referredNode = NULL;
+		Oid referringRelationOid = InvalidOid;
+		Oid referredRelationOid = InvalidOid;
+
+		/* Not a foreign key */
+		if (con->contype != CONSTRAINT_FOREIGN)
+		{
+			continue;
+		}
+
+		/*
+		 * Check whether we have seen  referring or referred relations in
+		 * constraint table before. If we haven't, add them to the hash map
+		 * of graph.
+		 */
+		referringRelationOid = con->conrelid;
+		referredRelationOid = con->confrelid;
+
+		referringNode = (FRelNode *) hash_search(frelGraph->nodeMap,
+												 &referringRelationOid,
+												 HASH_ENTER, &referringFound);
+		referredNode = (FRelNode *) hash_search(frelGraph->nodeMap, &referredRelationOid,
+												HASH_ENTER, &referredFound);
+
+		/*
+		 * If we found a node in the graph we only need to add referred node to
+		 * the adjacency  list of that node.
+		 */
+		if (referringFound)
+		{
+			/*
+			 * If referred node is already in the adjacency list of referred node, do nothing.
+			 */
+			if (referringNode->adjacencyList == NIL || !list_member(
+					referringNode->adjacencyList, referredNode))
+			{
+				/*
+				 * If referred node also exists, add it to the adjacency list
+				 * and continue.
+				 */
+				if (referredFound)
+				{
+					referringNode->adjacencyList = lappend(referringNode->adjacencyList,
+														   referredNode);
+				}
+				else
+				{
+					/*
+					 * We need to setup the node and add it to the adjacency list
+					 * of referring node.
+					 */
+					referredNode->adjacencyList = NIL;
+					referredNode->index = curIndex++;
+					referringNode->adjacencyList = lappend(referringNode->adjacencyList,
+														   referredNode);
+				}
+			}
+			else
+			{
+				continue;
+			}
+		}
+		else
+		{
+			/*
+			 * If referring node is not exist in the graph, set its remaining parameters.
+			 */
+			referringNode->adjacencyList = NIL;
+			referringNode->index = curIndex++;
+			if (referredFound)
+			{
+				referringNode->adjacencyList = lappend(referringNode->adjacencyList,
+													   referredNode);
+			}
+			else
+			{
+				/*
+				 * We need to setup the node and add it to the adjacency list
+				 * of referring node.
+				 */
+				referredNode->adjacencyList = NIL;
+				referredNode->index = curIndex++;
+				referringNode->adjacencyList = lappend(referringNode->adjacencyList,
+													   referredNode);
+			}
+		}
+	}
+
+
+	frelGraph->nodeCount = curIndex;
+
+	if (frelGraph->nodeCount > 0)
+	{
+		/*
+		 * Initialize index to oid mapping, that is necessary for accessing node
+		 * elements in O(1) time.
+		 */
+		InitializeIndexToOidMapping();
+
+		/*
+		 * Transitivity matrix will be used to find affected and affecting relations
+		 * for foreign key relation graph.
+		 */
+		CreateTransitivityMatrix();
+	}
+
+	frelGraph->validGraph = true;
+	systable_endscan(fkeyScan);
+	heap_close(fkeyRel, AccessShareLock);
+}
+
+
+/*
+ * InitializeIndexToOidMapping set the element of indexToOidArray element of
+ * frelGraph. You need to be make sure that all of the nodes have been added
+ * to the frelGraph and nodeCount has been set before.
+ */
+static void
+InitializeIndexToOidMapping()
+{
+	HASH_SEQ_STATUS status;
+	FRelNode *frelNode = NULL;
+
+	frelGraph->indexToOidArray = (Oid *) palloc(sizeof(Oid) * frelGraph->nodeCount);
+
+	hash_seq_init(&status, frelGraph->nodeMap);
+	while ((frelNode = (FRelNode *) hash_seq_search(&status)) != 0)
+	{
+		uint32 relationIndex = frelNode->index;
+		frelGraph->indexToOidArray[relationIndex] = frelNode->relationId;
+	}
+}
+
+
+/*
+ * CreateTransitiveClosure creates the transitive closure matrix for the given
+ * graph. It uses Floyd Warshall algorithm for obtaining the transitivity graph.
+ */
+static void
+CreateTransitivityMatrix()
+{
+	HASH_SEQ_STATUS status;
+	FRelNode *frelNode = NULL;
+	int sourceCounter = 0;
+	int interVertexCounter = 0;
+	int destinationCounter = 0;
+	int curIndex = 0;
+
+	/* first, allocate memory for transitivity matrix */
+	frelGraph->transitivityMatrix = (bool **) palloc(frelGraph->nodeCount *
+													 sizeof(bool *));
+	while (curIndex < frelGraph->nodeCount)
+	{
+		frelGraph->transitivityMatrix[curIndex] = (bool *) palloc(frelGraph->nodeCount *
+																  sizeof(bool));
+		memset(frelGraph->transitivityMatrix[curIndex], false, frelGraph->nodeCount *
+			   sizeof(bool));
+		curIndex += 1;
+	}
+
+	hash_seq_init(&status, frelGraph->nodeMap);
+
+	/*
+	 * Create the initial adjacency matrix, that will be transformed to the
+	 * transitivity matrix dynamically.
+	 */
+	while ((frelNode = (FRelNode *) hash_seq_search(&status)) != 0)
+	{
+		uint32 relationIndex = frelNode->index;
+		ListCell *nodeCell = NULL;
+		List *curAdjacencyList = frelNode->adjacencyList;
+
+
+		foreach(nodeCell, curAdjacencyList)
+		{
+			FRelNode *referencingFrelNode = (FRelNode *) lfirst(nodeCell);
+			uint32 referencingRelationIndex = referencingFrelNode->index;
+			frelGraph->transitivityMatrix[relationIndex][referencingRelationIndex] = true;
+		}
+	}
+
+	/*
+	 * Add all vertices one by one to the set of intermediate vertices.
+	 *
+	 * Before start of a iteration, we have transitivity values for all
+	 * pairs of vertices such that the transitivity values consider only
+	 * the vertices in set {0, 1, 2, .. k-1} as intermediate vertices.
+	 *
+	 * After the end of a iteration, vertex no. k is added to the set of
+	 * intermediate vertices and the set becomes {0, 1, .. k}
+	 */
+	for (interVertexCounter = 0; interVertexCounter < frelGraph->nodeCount;
+		 interVertexCounter++)
+	{
+		/* pick all vertices as source one by one */
+		for (sourceCounter = 0; sourceCounter < frelGraph->nodeCount; sourceCounter++)
+		{
+			/* pick all vertices as destination for the above picked source */
+			for (destinationCounter = 0; destinationCounter < frelGraph->nodeCount;
+				 destinationCounter++)
+			{
+				/*
+				 * If vertex k is on a path from i to j, then make sure that
+				 * the value of transitivityMatrix[i][j] is 1.
+				 */
+				frelGraph->transitivityMatrix[sourceCounter][destinationCounter] =
+					frelGraph->transitivityMatrix[sourceCounter][destinationCounter] ||
+					(frelGraph->transitivityMatrix[sourceCounter][interVertexCounter] &&
+					 frelGraph->transitivityMatrix[interVertexCounter][destinationCounter]);
+			}
+		}
+	}
+}
+
+
+/*
+ * ClearForeignKeyRelationGraph clear all the allocated memory obtained for
+ * foreign key relation graph.
+ */
+void
+ClearForeignKeyRelationGraph()
+{
+	MemoryContext oldContext = MemoryContextSwitchTo(CacheMemoryContext);
+	int indexCounter = 0;
+	if (frelGraph == NULL)
+	{
+		return;
+	}
+
+	/*
+	 * Free the transitivity matrix and index-oid mapping array of foreign key
+	 * relation graph. If graph doesn't have any node, then we do not have neither
+	 * of them.
+	 */
+	if (frelGraph->nodeCount > 0)
+	{
+		for (indexCounter = 0; indexCounter < frelGraph->nodeCount; indexCounter++)
+		{
+			pfree(frelGraph->transitivityMatrix[indexCounter]);
+		}
+
+		pfree(frelGraph->indexToOidArray);
+	}
+
+	/* free the map holding relation nodes */
+	hash_destroy(frelGraph->nodeMap);
+
+	/* clear the graph */
+	pfree(frelGraph);
+
+	frelGraph = NULL;
+
+	MemoryContextSwitchTo(oldContext);
+}
 
 
 static bool HeapTupleOfForeignConstraintIncludesColumn(HeapTuple heapTuple, Oid

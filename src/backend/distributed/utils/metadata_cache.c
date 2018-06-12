@@ -29,6 +29,7 @@
 #include "distributed/colocation_utils.h"
 #include "distributed/connection_management.h"
 #include "distributed/citus_ruleutils.h"
+#include "distributed/foreign_constraint.h"
 #include "distributed/master_metadata_utility.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/multi_logical_optimizer.h"
@@ -204,6 +205,7 @@ static ShardPlacement * ResolveGroupShardPlacement(
 	GroupShardPlacement *groupShardPlacement, ShardCacheEntry *shardEntry);
 static WorkerNode * LookupNodeForGroup(uint32 groupid);
 static Oid LookupEnumValueId(Oid typeId, char *valueName);
+static void SetRelatedOidsInvalid(Oid relationId);
 
 
 /* exports for SQL callable functions */
@@ -980,6 +982,11 @@ BuildDistTableCacheEntry(DistTableCacheEntry *cacheEntry)
 	{
 		cacheEntry->hashFunction = NULL;
 	}
+
+	cacheEntry->referencedRelationsViaForeignKey = ReferencedRelationIdList(
+		cacheEntry->relationId);
+	cacheEntry->referencingRelationsViaForeignKey = ReferencingRelationIdList(
+		cacheEntry->relationId);
 
 	heap_close(pgDistPartition, NoLock);
 }
@@ -2905,6 +2912,16 @@ ResetDistTableCacheEntry(DistTableCacheEntry *cacheEntry)
 		pfree(cacheEntry->arrayOfPlacementArrays);
 		cacheEntry->arrayOfPlacementArrays = NULL;
 	}
+	if (cacheEntry->referencedRelationsViaForeignKey)
+	{
+		pfree(cacheEntry->referencedRelationsViaForeignKey);
+		cacheEntry->referencedRelationsViaForeignKey = NIL;
+	}
+	if (cacheEntry->referencingRelationsViaForeignKey)
+	{
+		pfree(cacheEntry->referencingRelationsViaForeignKey);
+		cacheEntry->referencingRelationsViaForeignKey = NIL;
+	}
 
 	cacheEntry->shardIntervalArrayLength = 0;
 	cacheEntry->hasUninitializedShardInterval = false;
@@ -2932,17 +2949,22 @@ InvalidateDistRelationCacheCallback(Datum argument, Oid relationId)
 		{
 			cacheEntry->isValid = false;
 		}
+
+		SetForeignKeyGraphInvalid();
 	}
 	else
 	{
 		void *hashKey = (void *) &relationId;
 		bool foundInCache = false;
 
+
 		DistTableCacheEntry *cacheEntry = hash_search(DistTableCacheHash, hashKey,
 													  HASH_FIND, &foundInCache);
 		if (foundInCache)
 		{
 			cacheEntry->isValid = false;
+
+			SetRelatedOidsInvalid(relationId);
 		}
 	}
 
@@ -2954,6 +2976,51 @@ InvalidateDistRelationCacheCallback(Datum argument, Oid relationId)
 	if (relationId != InvalidOid && relationId == MetadataCache.distPartitionRelationId)
 	{
 		InvalidateMetadataSystemCache();
+	}
+}
+
+
+/*
+ * SetRelatedOidsInvalid sets the affected relation's cache entry to invalid.
+ * It also invalidates foreign key relation graph if any relation
+ */
+static void
+SetRelatedOidsInvalid(Oid relationId)
+{
+	List *connectedComponentListOfRelation = NIL;
+	ListCell *nodeCell = NULL;
+	bool foundInCache = false;
+
+	/*
+	 * We need to invalidate cache entry of each relation which are in the
+	 * same connected component with the given relation. If we do not have
+	 * foreign key relation graph, we don't need to do anything.
+	 *
+	 * We also need to invalidate foreign key relation graph if any of the
+	 * node in it is affected by invalidating given relation ID.
+	 */
+	if (IsForeignKeyGraphValid())
+	{
+		connectedComponentListOfRelation = ConnectedComponentOfRelationId(
+			relationId);
+
+		foreach(nodeCell, connectedComponentListOfRelation)
+		{
+			Oid neighbourRelationId = lfirst_oid(nodeCell);
+			void *neighbourHashKey = (void *) &neighbourRelationId;
+			DistTableCacheEntry *neighbourCacheEntry = hash_search(
+				DistTableCacheHash, neighbourHashKey, HASH_FIND, &foundInCache);
+
+			if (foundInCache)
+			{
+				neighbourCacheEntry->isValid = false;
+			}
+		}
+
+		/*if (list_length(connectedComponentListOfRelation) > 0) */
+		/*{ */
+		SetForeignKeyGraphInvalid();
+		/*} */
 	}
 }
 

@@ -12,6 +12,7 @@
 #include "postgres.h"
 #include "postgres_ext.h"
 #include "utils/relcache.h"
+#include "utils/hsearch.h"
 #include "nodes/primnodes.h"
 
 extern bool ConstraintIsAForeignKeyToReferenceTable(char *constraintName,
@@ -25,5 +26,11 @@ extern bool ColumnAppearsInForeignKeyToReferenceTable(char *columnName, Oid
 extern List * GetTableForeignConstraintCommands(Oid relationId);
 extern bool HasForeignKeyToReferenceTable(Oid relationId);
 extern bool TableReferenced(Oid relationId);
+extern List * ReferencedRelationIdList(Oid relationId);
+extern List * ReferencingRelationIdList(Oid relationId);
+extern void SetForeignKeyGraphInvalid(void);
+extern bool IsForeignKeyGraphValid(void);
+extern List * ConnectedComponentOfRelationId(Oid relationId);
+extern void ClearForeignKeyRelationGraph(void);
 
 #endif
