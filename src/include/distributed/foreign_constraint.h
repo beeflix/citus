@@ -21,6 +21,7 @@ extern void ErrorIfUnsupportedForeignConstraint(Relation relation, char
 												Var *distributionColumn, uint32
 												colocationId);
 extern List * GetTableForeignConstraintCommands(Oid relationId);
+extern bool HasForeignKeyToReferenceTable(Oid relationId);
 extern bool TableReferenced(Oid relationId);
 extern List * ReferencedRelationIdList(Oid relationId);
 extern List * ReferencingRelationIdList(Oid relationId);

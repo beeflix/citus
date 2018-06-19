@@ -99,6 +99,7 @@ static bool LocalTableEmpty(Oid tableId);
 static void CopyLocalDataIntoShards(Oid relationId);
 static List * TupleDescColumnNameList(TupleDesc tupleDescriptor);
 static bool RelationUsesIdentityColumns(TupleDesc relationDesc);
+static bool CanUseExclusiveConnections(Oid relationId, bool localTableEmpty);
 
 /* exports for SQL callable functions */
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
@@ -477,7 +478,8 @@ CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
 
 	if (RegularTable(relationId))
 	{
-		useExclusiveConnection = IsTransactionBlock() || !localTableEmpty;
+		useExclusiveConnection = CanUseExclusiveConnections(relationId,
+															localTableEmpty);
 	}
 
 	if (colocatedTableId != InvalidOid)
@@ -1078,6 +1080,44 @@ LocalTableEmpty(Oid tableId)
 	SPI_finish();
 
 	return localTableEmpty;
+}
+
+
+/*
+ * CanUseExclusiveConnections checks if we can open parallel connections
+ * while creating shards. We simply error out if we need to execute
+ * sequentially but there is data in the table, since we cannot copy the
+ * data to shards sequentially.
+ */
+static bool
+CanUseExclusiveConnections(Oid relationId, bool localTableEmpty)
+{
+	bool hasForeignKeyToReferenceTable = HasForeignKeyToReferenceTable(relationId);
+	bool shouldRunSequential = MultiShardConnectionType == SEQUENTIAL_CONNECTION ||
+							   hasForeignKeyToReferenceTable;
+
+	if (!localTableEmpty && shouldRunSequential)
+	{
+		char *relationName = get_rel_name(relationId);
+
+		ereport(ERROR, (errmsg("cannot distribute \"%s\" in sequential mode "
+							   "because it is not empty", relationName),
+						errhint("If you have manually set "
+								"citus.multi_shard_modify_mode to 'sequential', "
+								"try with 'parallel' option. If that is not the "
+								"case, try distributing local tables when they "
+								"are empty.")));
+	}
+	else if (shouldRunSequential)
+	{
+		return false;
+	}
+	else if (!localTableEmpty || IsTransactionBlock())
+	{
+		return true;
+	}
+
+	return false;
 }
 
 
