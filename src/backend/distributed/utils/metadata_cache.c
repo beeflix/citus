@@ -3020,6 +3020,7 @@ SetRelatedOidsInvalid(Oid relationId)
 		/*if (list_length(connectedComponentListOfRelation) > 0) */
 		/*{ */
 		SetForeignKeyGraphInvalid();
+
 		/*} */
 	}
 }
