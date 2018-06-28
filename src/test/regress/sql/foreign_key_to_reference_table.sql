@@ -795,11 +795,10 @@ INSERT INTO test_table_2 VALUES (1,1), (2,2), (3,3);
 ALTER TABLE test_table_2 ALTER COLUMN value_1 SET DATA TYPE bigint;
 ALTER TABLE test_table_1 ALTER COLUMN id SET DATA TYPE bigint;
 
--- should fail since there is a bigint out of integer range > (2^32 - 1)
 INSERT INTO test_table_1 VALUES (2147483648,4);
 INSERT INTO test_table_2 VALUES (4,2147483648);
+-- should fail since there is a bigint out of integer range > (2^32 - 1)
 ALTER TABLE test_table_2 ALTER COLUMN value_1 SET DATA TYPE int;
-
 SELECT count(*) FROM table_fkeys_in_workers WHERE relid LIKE 'fkey_reference_table.%' AND refd_relid LIKE 'fkey_reference_table.%';
 DROP TABLE test_table_1 CASCADE;
 DROP TABLE test_table_2;
@@ -909,6 +908,55 @@ BEGIN;
   ALTER TABLE test_table_1 ADD COLUMN id int;
 COMMIT;
 DROP TABLE test_table_1, test_table_2, test_table_3;
+-- NOTE: Postgres does not support foreign keys on partitioned tables currently.
+-- However, we can create foreign keys to/from the partitions themselves.
+-- The following tests chech if we create the foreign constraints in partitions properly.
+CREATE TABLE referenced_table(id int PRIMARY KEY, test_column int);
+CREATE TABLE referencing_table(id int, value_1 int) PARTITION BY RANGE (value_1);
+CREATE TABLE referencing_table_0 PARTITION OF referencing_table FOR VALUES FROM (0) TO (2);
+CREATE TABLE referencing_table_2 PARTITION OF referencing_table FOR VALUES FROM (2) TO (4);
+CREATE TABLE referencing_table_4 PARTITION OF referencing_table FOR VALUES FROM (4) TO (6);
+
+-- partitioned tables are not supported as reference tables
+select create_reference_table('referencing_table');
+
+-- partitioned tables are supported as hash distributed table
+SELECT create_reference_table('referenced_table');
+SELECT create_distributed_table('referencing_table', 'id');
+
+-- add foreign constraints in between partitions
+ALTER TABLE referencing_table_0 ADD CONSTRAINT pkey PRIMARY KEY (id);
+ALTER TABLE referencing_table_4 ADD CONSTRAINT fkey FOREIGN KEY (id) REFERENCES referencing_table_0;
+-- add foreign constraint from a partition to reference table
+ALTER TABLE referencing_table_4 ADD CONSTRAINT fkey_to_ref FOREIGN KEY (value_1) REFERENCES referenced_table;
+-- should fail since the data will flow to partitioning_test_4 and it has a foreign constraint to partitioning_test_0 on id column
+INSERT INTO referencing_table VALUES (0, 5);
+-- should succeed on partitioning_test_0
+INSERT INTO referencing_table VALUES (0, 1);
+SELECT * FROM referencing_table;
+-- should fail since partitioning_test_4 has foreign constraint to referenced_table on value_1 column
+INSERT INTO referencing_table VALUES (0, 5);
+INSERT INTO referenced_table VALUES(5,5);
+-- should succeed since both of the foreign constraints are positive
+INSERT INTO referencing_table VALUES (0, 5);
+
+DROP TABLE referenced_table CASCADE;
+DROP TABLE referencing_table;
+
+-- Check if MX works properly
+SET citus.replication_model TO streaming;
+SELECT start_metadata_sync_to_node('localhost', :worker_1_port);
+CREATE TABLE referenced_table(test_column int, test_column2 int, PRIMARY KEY(test_column));
+CREATE TABLE referenced_table2(test_column int, test_column2 int, PRIMARY KEY(test_column2));
+CREATE TABLE referencing_table(id int, ref_id int);
+ALTER TABLE referencing_table ADD CONSTRAINT fkey_ref FOREIGN KEY (id) REFERENCES referenced_table(test_column) ON DELETE CASCADE;
+ALTER TABLE referencing_table ADD CONSTRAINT foreign_key_2 FOREIGN KEY (id) REFERENCES referenced_table2(test_column2) ON DELETE CASCADE;
+
+SELECT create_reference_table('referenced_table');
+SELECT create_reference_table('referenced_table2');
+SELECT create_distributed_table('referencing_table', 'id');
+
+SELECT * FROM table_fkeys_in_workers WHERE relid LIKE 'fkey_reference_table.%' AND refd_relid LIKE 'fkey_reference_table.%' ORDER BY 1, 2;
 
 DROP SCHEMA fkey_reference_table CASCADE;
 SET search_path TO DEFAULT;

@@ -1807,12 +1807,26 @@ DROP TABLE test_table_1, test_table_2, test_table_3;
 -- The following tests chech if we create the foreign constraints in partitions properly.
 CREATE TABLE referenced_table(id int PRIMARY KEY, test_column int);
 CREATE TABLE referencing_table(id int, value_1 int) PARTITION BY RANGE (value_1);
+ERROR:  syntax error at or near "PARTITION"
+LINE 1: ...EATE TABLE referencing_table(id int, value_1 int) PARTITION ...
+                                                             ^
 CREATE TABLE referencing_table_0 PARTITION OF referencing_table FOR VALUES FROM (0) TO (2);
+ERROR:  syntax error at or near "PARTITION"
+LINE 1: CREATE TABLE referencing_table_0 PARTITION OF referencing_ta...
+                                         ^
 CREATE TABLE referencing_table_2 PARTITION OF referencing_table FOR VALUES FROM (2) TO (4);
+ERROR:  syntax error at or near "PARTITION"
+LINE 1: CREATE TABLE referencing_table_2 PARTITION OF referencing_ta...
+                                         ^
 CREATE TABLE referencing_table_4 PARTITION OF referencing_table FOR VALUES FROM (4) TO (6);
+ERROR:  syntax error at or near "PARTITION"
+LINE 1: CREATE TABLE referencing_table_4 PARTITION OF referencing_ta...
+                                         ^
 -- partitioned tables are not supported as reference tables
 select create_reference_table('referencing_table');
-ERROR:  distributing partitioned tables in only supported for hash-distributed tables
+ERROR:  relation "referencing_table" does not exist
+LINE 1: select create_reference_table('referencing_table');
+                                      ^
 -- partitioned tables are supported as hash distributed table
 SELECT create_reference_table('referenced_table');
  create_reference_table 
@@ -1821,40 +1835,45 @@ SELECT create_reference_table('referenced_table');
 (1 row)
 
 SELECT create_distributed_table('referencing_table', 'id');
- create_distributed_table 
---------------------------
- 
-(1 row)
-
+ERROR:  relation "referencing_table" does not exist
+LINE 1: SELECT create_distributed_table('referencing_table', 'id');
+                                        ^
 -- add foreign constraints in between partitions
 ALTER TABLE referencing_table_0 ADD CONSTRAINT pkey PRIMARY KEY (id);
+ERROR:  relation "referencing_table_0" does not exist
 ALTER TABLE referencing_table_4 ADD CONSTRAINT fkey FOREIGN KEY (id) REFERENCES referencing_table_0;
+ERROR:  relation "referencing_table_4" does not exist
 -- add foreign constraint from a partition to reference table
 ALTER TABLE referencing_table_4 ADD CONSTRAINT fkey_to_ref FOREIGN KEY (value_1) REFERENCES referenced_table;
+ERROR:  relation "referencing_table_4" does not exist
 -- should fail since the data will flow to partitioning_test_4 and it has a foreign constraint to partitioning_test_0 on id column
 INSERT INTO referencing_table VALUES (0, 5);
-ERROR:  insert or update on table "referencing_table_4_7000533" violates foreign key constraint "fkey_7000533"
-DETAIL:  Key (id)=(0) is not present in table "referencing_table_0_7000517".
-CONTEXT:  while executing command on localhost:57638
+ERROR:  relation "referencing_table" does not exist
+LINE 1: INSERT INTO referencing_table VALUES (0, 5);
+                    ^
 -- should succeed on partitioning_test_0
 INSERT INTO referencing_table VALUES (0, 1);
+ERROR:  relation "referencing_table" does not exist
+LINE 1: INSERT INTO referencing_table VALUES (0, 1);
+                    ^
 SELECT * FROM referencing_table;
- id | value_1 
-----+---------
-  0 |       1
-(1 row)
-
+ERROR:  relation "referencing_table" does not exist
+LINE 1: SELECT * FROM referencing_table;
+                      ^
 -- should fail since partitioning_test_4 has foreign constraint to referenced_table on value_1 column
 INSERT INTO referencing_table VALUES (0, 5);
-ERROR:  insert or update on table "referencing_table_4_7000533" violates foreign key constraint "fkey_to_ref_7000533"
-DETAIL:  Key (value_1)=(5) is not present in table "referenced_table_7000505".
-CONTEXT:  while executing command on localhost:57638
+ERROR:  relation "referencing_table" does not exist
+LINE 1: INSERT INTO referencing_table VALUES (0, 5);
+                    ^
 INSERT INTO referenced_table VALUES(5,5);
 -- should succeed since both of the foreign constraints are positive
 INSERT INTO referencing_table VALUES (0, 5);
+ERROR:  relation "referencing_table" does not exist
+LINE 1: INSERT INTO referencing_table VALUES (0, 5);
+                    ^
 DROP TABLE referenced_table CASCADE;
-NOTICE:  drop cascades to constraint fkey_to_ref on table referencing_table_4
 DROP TABLE referencing_table;
+ERROR:  table "referencing_table" does not exist
 -- Check if MX works properly
 SET citus.replication_model TO streaming;
 SELECT start_metadata_sync_to_node('localhost', :worker_1_port);
@@ -1890,23 +1909,23 @@ SELECT * FROM table_fkeys_in_workers WHERE relid LIKE 'fkey_reference_table.%' A
          name          |                     relid                      |                   refd_relid                   
 -----------------------+------------------------------------------------+------------------------------------------------
  fkey_ref              | fkey_reference_table.referencing_table         | fkey_reference_table.referenced_table
- fkey_ref_7000540      | fkey_reference_table.referencing_table_7000540 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000541      | fkey_reference_table.referencing_table_7000541 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000542      | fkey_reference_table.referencing_table_7000542 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000543      | fkey_reference_table.referencing_table_7000543 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000544      | fkey_reference_table.referencing_table_7000544 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000545      | fkey_reference_table.referencing_table_7000545 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000546      | fkey_reference_table.referencing_table_7000546 | fkey_reference_table.referenced_table_7000538
- fkey_ref_7000547      | fkey_reference_table.referencing_table_7000547 | fkey_reference_table.referenced_table_7000538
+ fkey_ref_7000508      | fkey_reference_table.referencing_table_7000508 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000509      | fkey_reference_table.referencing_table_7000509 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000510      | fkey_reference_table.referencing_table_7000510 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000511      | fkey_reference_table.referencing_table_7000511 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000512      | fkey_reference_table.referencing_table_7000512 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000513      | fkey_reference_table.referencing_table_7000513 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000514      | fkey_reference_table.referencing_table_7000514 | fkey_reference_table.referenced_table_7000506
+ fkey_ref_7000515      | fkey_reference_table.referencing_table_7000515 | fkey_reference_table.referenced_table_7000506
  foreign_key_2         | fkey_reference_table.referencing_table         | fkey_reference_table.referenced_table2
- foreign_key_2_7000540 | fkey_reference_table.referencing_table_7000540 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000541 | fkey_reference_table.referencing_table_7000541 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000542 | fkey_reference_table.referencing_table_7000542 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000543 | fkey_reference_table.referencing_table_7000543 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000544 | fkey_reference_table.referencing_table_7000544 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000545 | fkey_reference_table.referencing_table_7000545 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000546 | fkey_reference_table.referencing_table_7000546 | fkey_reference_table.referenced_table2_7000539
- foreign_key_2_7000547 | fkey_reference_table.referencing_table_7000547 | fkey_reference_table.referenced_table2_7000539
+ foreign_key_2_7000508 | fkey_reference_table.referencing_table_7000508 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000509 | fkey_reference_table.referencing_table_7000509 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000510 | fkey_reference_table.referencing_table_7000510 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000511 | fkey_reference_table.referencing_table_7000511 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000512 | fkey_reference_table.referencing_table_7000512 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000513 | fkey_reference_table.referencing_table_7000513 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000514 | fkey_reference_table.referencing_table_7000514 | fkey_reference_table.referenced_table2_7000507
+ foreign_key_2_7000515 | fkey_reference_table.referencing_table_7000515 | fkey_reference_table.referenced_table2_7000507
 (18 rows)
 
 DROP SCHEMA fkey_reference_table CASCADE;
