@@ -23,6 +23,7 @@ extern void ErrorIfUnsupportedForeignConstraint(Relation relation, char
 extern List * GetTableForeignConstraintCommands(Oid relationId);
 extern bool TableReferenced(Oid relationId);
 extern bool TableReferencing(Oid relationId);
+extern bool ConstraintIsAForeignKey(char *constraintName, Oid relationId);
 extern List * ReferencedRelationIdList(Oid relationId);
 extern List * ReferencingRelationIdList(Oid relationId);
 extern void SetForeignKeyGraphInvalid(void);

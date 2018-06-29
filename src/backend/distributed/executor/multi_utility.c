@@ -2231,7 +2231,19 @@ ErrorIfUnsupportedAlterTableStmt(AlterTableStmt *alterTableStatement)
 #endif
 			case AT_DropConstraint:
 			{
-				CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+				LOCKMODE lockmode = AlterTableGetLockLevel(alterTableStatement->cmds);
+				Oid relationId = AlterTableLookupRelation(alterTableStatement, lockmode);
+
+				if (!OidIsValid(relationId))
+				{
+					return;
+				}
+
+				if (ConstraintIsAForeignKey(command->name, relationId))
+				{
+					CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+				}
+
 				break;
 			}
 

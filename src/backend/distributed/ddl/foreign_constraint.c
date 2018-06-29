@@ -939,3 +939,50 @@ TableReferencing(Oid relationId)
 
 	return false;
 }
+
+
+/*
+ * ConstraintIsAForeignKey returns true if the given constraint name
+ * is a foreign key to defined on the relation.
+ */
+bool
+ConstraintIsAForeignKey(char *constraintNameInput, Oid relationId)
+{
+	Relation pgConstraint = NULL;
+	SysScanDesc scanDescriptor = NULL;
+	ScanKeyData scanKey[1];
+	int scanKeyCount = 1;
+	HeapTuple heapTuple = NULL;
+
+	pgConstraint = heap_open(ConstraintRelationId, AccessShareLock);
+
+	ScanKeyInit(&scanKey[0], Anum_pg_constraint_contype, BTEqualStrategyNumber, F_CHAREQ,
+				CharGetDatum(CONSTRAINT_FOREIGN));
+	scanDescriptor = systable_beginscan(pgConstraint, InvalidOid, false,
+										NULL, scanKeyCount, scanKey);
+
+	heapTuple = systable_getnext(scanDescriptor);
+	while (HeapTupleIsValid(heapTuple))
+	{
+		Form_pg_constraint constraintForm = (Form_pg_constraint) GETSTRUCT(heapTuple);
+		char *constraintName = (constraintForm->conname).data;
+
+		if (strncmp(constraintName, constraintNameInput, NAMEDATALEN) == 0 &&
+			constraintForm->conrelid == relationId)
+		{
+			systable_endscan(scanDescriptor);
+
+			heap_close(pgConstraint, AccessShareLock);
+
+			return true;
+		}
+
+		heapTuple = systable_getnext(scanDescriptor);
+	}
+
+	/* clean up scan and close system catalog */
+	systable_endscan(scanDescriptor);
+	heap_close(pgConstraint, AccessShareLock);
+
+	return false;
+}
