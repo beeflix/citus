@@ -550,10 +550,26 @@ multi_ProcessUtility(PlannedStmt *pstmt,
 
 				if (alterTableType == AT_AddConstraint)
 				{
+					LOCKMODE lockmode = NoLock;
+					Oid relationId = InvalidOid;
+					Constraint *constraint = NULL;
+
 					Assert(list_length(commandList) == 1);
 					ErrorIfUnsupportedAlterAddConstraintStmt(alterTableStatement);
 
-					CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+					lockmode = AlterTableGetLockLevel(alterTableStatement->cmds);
+					relationId = AlterTableLookupRelation(alterTableStatement, lockmode);
+
+					if (!OidIsValid(relationId))
+					{
+						return;
+					}
+
+					constraint = (Constraint *) command->def;
+					if (ConstraintIsAForeignKey(constraint->conname, relationId))
+					{
+						CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+					}
 				}
 			}
 		}
