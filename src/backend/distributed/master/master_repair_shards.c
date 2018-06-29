@@ -25,6 +25,7 @@
 #include "distributed/master_protocol.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/multi_router_executor.h"
+#include "distributed/reference_table_utils.h"
 #include "distributed/resource_lock.h"
 #include "distributed/worker_manager.h"
 #include "distributed/worker_protocol.h"
@@ -54,6 +55,7 @@ static void EnsureShardCanBeRepaired(int64 shardId, char *sourceNodeName,
 									 int32 targetNodePort);
 static List * RecreateTableDDLCommandList(Oid relationId);
 static List * WorkerApplyShardDDLCommandList(List *ddlCommandList, int64 shardId);
+static void LockReferencedTablesIfExist(Oid relationId);
 
 /* declarations for dynamic loading */
 PG_FUNCTION_INFO_V1(master_copy_shard_placement);
@@ -81,9 +83,18 @@ master_copy_shard_placement(PG_FUNCTION_ARGS)
 	bool doRepair = PG_GETARG_BOOL(5);
 	Oid shardReplicationModeOid = PG_GETARG_OID(6);
 	char shardReplicationMode = LookupShardTransferMode(shardReplicationModeOid);
+	ShardInterval *shardInterval = LoadShardInterval(shardId);
 
 	char *sourceNodeName = text_to_cstring(sourceNodeNameText);
 	char *targetNodeName = text_to_cstring(targetNodeNameText);
+
+	/*
+	 * We take a lock on the referenced table if there is a foreign constraint.
+	 * Currently, we do not support replication factor > 1 on the tables with
+	 * foreign constraints, so this command will fail for this case anyway.
+	 * However, it is taken as a precaution in case we support it one day.
+	 */
+	LockReferencedTablesIfExist(shardInterval->relationId);
 
 	if (!doRepair)
 	{
@@ -379,7 +390,19 @@ CopyShardForeignConstraintCommandList(ShardInterval *shardInterval)
 		referencedSchemaId = get_rel_namespace(referencedRelationId);
 		referencedSchemaName = get_namespace_name(referencedSchemaId);
 		escapedReferencedSchemaName = quote_literal_cstr(referencedSchemaName);
-		referencedShardId = ColocatedShardIdInRelation(referencedRelationId, shardIndex);
+
+		if (PartitionMethod(referencedRelationId) == DISTRIBUTE_BY_NONE)
+		{
+			List *shardList = LoadShardList(referencedRelationId);
+			uint64 *shardIdPointer = (uint64 *) linitial(shardList);
+
+			referencedShardId = (*shardIdPointer);
+		}
+		else
+		{
+			referencedShardId = ColocatedShardIdInRelation(referencedRelationId,
+														   shardIndex);
+		}
 
 		appendStringInfo(applyForeignConstraintCommand,
 						 WORKER_APPLY_INTER_SHARD_DDL_COMMAND, shardInterval->shardId,
@@ -487,4 +510,45 @@ WorkerApplyShardDDLCommandList(List *ddlCommandList, int64 shardId)
 	}
 
 	return applyDdlCommandList;
+}
+
+
+/*
+ * LockReferencedTablesIfExist takes exclusive lock on the reference tables
+ * which has a foreign key from the given relation. This function is used
+ * for shard_rebalancer and tenant isolation to avoid modifications on the
+ * referenced end of a foreign key while we run shard_rebalancer or tenant
+ * isolation on the referencing end of it.
+ * If we do not block DMLs on the referenced table, we cannot avoid the
+ * inconsistency between the two copies of the data.
+ */
+static void
+LockReferencedTablesIfExist(Oid relationId)
+{
+	List *referencedTableList = NIL;
+	ListCell *referencedTableCell = NULL;
+
+	referencedTableList = GetReferencedReferenceTableList(relationId);
+	referencedTableList = SortList(referencedTableList, CompareOids);
+
+	foreach(referencedTableCell, referencedTableList)
+	{
+		Oid referencedTableId = lfirst_oid(referencedTableCell);
+		List *shardList = NIL;
+		uint64 *shardIdPointer = NULL;
+		Oid referencedShardId = InvalidOid;
+
+		/* check that user has owner rights in referenced table */
+		EnsureTableOwner(referencedTableId);
+
+		/*
+		 * Block concurrent reads on the referenced table so that there
+		 * is no inconsistency between before/after copy.
+		 */
+		shardList = LoadShardList(referencedTableId);
+		shardIdPointer = (uint64 *) linitial(shardList);
+		referencedShardId = (*shardIdPointer);
+
+		LockShardDistributionMetadata(referencedShardId, ExclusiveLock);
+	}
 }

@@ -25,5 +25,6 @@ extern bool ColumnAppearsInForeignKeyToReferenceTable(char *columnName, Oid
 extern List * GetTableForeignConstraintCommands(Oid relationId);
 extern bool HasForeignKeyToReferenceTable(Oid relationId);
 extern bool TableReferenced(Oid relationId);
+extern List * GetReferencedReferenceTableList(Oid relationId);
 
 #endif
