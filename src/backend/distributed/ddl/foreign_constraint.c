@@ -291,6 +291,9 @@ GetForeignConstraintRelationsHelper(Oid relationId, bool isReferencing)
 			foreignKeyList = lappend_oid(foreignKeyList, currentNode->relationId);
 			currentNode->visited = false;
 		}
+
+		/* set to false separately, since we don't add itself to foreign node list */
+		relationNode->visited = false;
 	}
 
 	return foreignKeyList;
@@ -311,7 +314,6 @@ GetConnectedListHelper(FRelNode *node, List **adjacentNodeList, bool isReferenci
 	List *adjacencyList = NIL;
 
 	node->visited = true;
-	*adjacentNodeList = lappend(*adjacentNodeList, node);
 
 	if (isReferencing)
 	{
@@ -327,6 +329,7 @@ GetConnectedListHelper(FRelNode *node, List **adjacentNodeList, bool isReferenci
 		FRelNode *curNode = (FRelNode *) lfirst(nodeCell);
 		if (curNode->visited == false)
 		{
+			*adjacentNodeList = lappend(*adjacentNodeList, curNode);
 			GetConnectedListHelper(curNode, adjacentNodeList, isReferencing);
 		}
 	}
@@ -397,7 +400,6 @@ PopulateAdjacencyLists(void)
 	ScanKeyData scanKey[1];
 	int scanKeyCount = 1;
 
-	/*ScanKeyData scanKey[1]; */
 	Oid prevReferencingOid = InvalidOid;
 	Oid prevReferencedOid = InvalidOid;
 	List *frelEdgeList = NIL;
@@ -451,41 +453,25 @@ PopulateAdjacencyLists(void)
 }
 
 
-/* Helper function to compare two FRelEdges using referencing and referenced id */
+/* Helper function to compare two FRelEdges using referencing and referenced ids
+ * respectively */
 static int
 CompareFRelEdges(const void *leftElement, const void *rightElement)
 {
 	const FRelEdge *leftEdge = *((const FRelEdge **) leftElement);
 	const FRelEdge *rightEdge = *((const FRelEdge **) rightElement);
 
-	Oid leftReferencingOID = leftEdge->referencingRelationOID;
-	Oid leftReferencedOID = leftEdge->referencedRelationOID;
-	Oid rightReferencingOID = rightEdge->referencingRelationOID;
-	Oid rightReferencedOID = rightEdge->referencedRelationOID;
+	int referencingDiff = leftEdge->referencingRelationOID -
+						  rightEdge->referencingRelationOID;
+	int referencedDiff = leftEdge->referencedRelationOID -
+						 rightEdge->referencedRelationOID;
 
-	if (leftReferencingOID < rightReferencingOID)
+	if (referencingDiff != 0)
 	{
-		return 1;
+		return referencingDiff;
 	}
-	else if (leftReferencedOID > rightReferencingOID)
-	{
-		return -1;
-	}
-	else
-	{
-		if (leftReferencedOID < rightReferencedOID)
-		{
-			return 1;
-		}
-		else if (leftReferencedOID > rightReferencedOID)
-		{
-			return -1;
-		}
-		else
-		{
-			return 0;
-		}
-	}
+
+	return referencedDiff;
 }
 
 

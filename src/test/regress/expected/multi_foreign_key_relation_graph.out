@@ -33,44 +33,38 @@ SELECT create_distributed_table('dtt3','id');
 SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt1'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
 ---------------------------------
- dtt1
- dtt2
- dtt3
-(3 rows)
-
-SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt2'::regclass) ORDER BY 1;
- get_referenced_relation_id_list 
----------------------------------
  dtt2
  dtt3
 (2 rows)
 
-SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
+SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt2'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
 ---------------------------------
  dtt3
 (1 row)
 
+SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
+ get_referenced_relation_id_list 
+---------------------------------
+(0 rows)
+
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt1'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
 ----------------------------------
- dtt1
-(1 row)
+(0 rows)
 
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt2'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
 ----------------------------------
  dtt1
- dtt2
-(2 rows)
+(1 row)
 
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt3'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
 ----------------------------------
  dtt1
  dtt2
- dtt3
-(3 rows)
+(2 rows)
 
 CREATE TABLE dtt4(id int PRIMARY KEY);
 SELECT create_distributed_table('dtt4', 'id');
@@ -93,8 +87,7 @@ ALTER TABLE dtt4 ADD CONSTRAINT dtt4_fkey FOREIGN KEY (id) REFERENCES dtt3(id);
 SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt4'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
 ---------------------------------
- dtt4
-(1 row)
+(0 rows)
 
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt4'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
@@ -102,19 +95,9 @@ SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_
  dtt1
  dtt2
  dtt3
- dtt4
-(4 rows)
+(3 rows)
 
 SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt1'::regclass) ORDER BY 1;
- get_referenced_relation_id_list 
----------------------------------
- dtt1
- dtt2
- dtt3
- dtt4
-(4 rows)
-
-SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt2'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
 ---------------------------------
  dtt2
@@ -122,39 +105,28 @@ SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id
  dtt4
 (3 rows)
 
-SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
+SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt2'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
 ---------------------------------
  dtt3
  dtt4
 (2 rows)
 
+SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
+ get_referenced_relation_id_list 
+---------------------------------
+ dtt4
+(1 row)
+
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt1'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
 ----------------------------------
- dtt1
-(1 row)
+(0 rows)
 
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt2'::regclass) ORDER BY 1;
  get_referencing_relation_id_list 
 ----------------------------------
  dtt1
- dtt2
-(2 rows)
-
-SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt3'::regclass) ORDER BY 1;
- get_referencing_relation_id_list 
-----------------------------------
- dtt1
- dtt2
- dtt3
-(3 rows)
-
-ALTER TABLE dtt4 DROP CONSTRAINT dtt4_fkey;
-SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
- get_referenced_relation_id_list 
----------------------------------
- dtt3
 (1 row)
 
 SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt3'::regclass) ORDER BY 1;
@@ -162,8 +134,20 @@ SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_
 ----------------------------------
  dtt1
  dtt2
- dtt3
-(3 rows)
+(2 rows)
+
+ALTER TABLE dtt4 DROP CONSTRAINT dtt4_fkey;
+SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt3'::regclass) ORDER BY 1;
+ get_referenced_relation_id_list 
+---------------------------------
+(0 rows)
+
+SELECT get_referencing_relation_id_list::regclass FROM get_referencing_relation_id_list('dtt3'::regclass) ORDER BY 1;
+ get_referencing_relation_id_list 
+----------------------------------
+ dtt1
+ dtt2
+(2 rows)
 
 SELECT get_referenced_relation_id_list::regclass FROM get_referenced_relation_id_list('dtt4'::regclass) ORDER BY 1;
  get_referenced_relation_id_list 
