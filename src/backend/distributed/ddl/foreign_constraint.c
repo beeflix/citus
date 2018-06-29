@@ -78,7 +78,7 @@ typedef struct FRelEdge
 static FRelGraph *frelGraph = NULL;
 
 static void CreateForeignKeyRelationGraph(void);
-static void PopulateAdjacencyLists();
+static void PopulateAdjacencyLists(void);
 static int CompareFRelEdges(const void *leftElement, const void *rightElement);
 static void AddEdge(HTAB *adjacencyLists, Oid referencingOid, Oid referencedOid);
 static FRelNode * CreateOrFindNode(HTAB *adjacencyLists, Oid relid);
@@ -389,7 +389,7 @@ CreateForeignKeyRelationGraph()
  * metadata table and populates them to the foreign key relation graph.
  */
 static void
-PopulateAdjacencyLists()
+PopulateAdjacencyLists(void)
 {
 	SysScanDesc fkeyScan;
 	HeapTuple tuple;
