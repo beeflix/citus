@@ -391,9 +391,11 @@ CreateForeignKeyRelationGraph()
 static void
 PopulateAdjacencyLists(void)
 {
-	SysScanDesc fkeyScan;
+	SysScanDesc scanDescriptor;
 	HeapTuple tuple;
-	Relation fkeyRel;
+	Relation pgConstraint;
+	ScanKeyData scanKey[1];
+	int scanKeyCount = 1;
 
 	/*ScanKeyData scanKey[1]; */
 	Oid prevReferencingOid = InvalidOid;
@@ -401,24 +403,17 @@ PopulateAdjacencyLists(void)
 	List *frelEdgeList = NIL;
 	ListCell *frelEdgeCell = NULL;
 
-	/* we only want foreign keys */
-	/*ScanKeyInit(&scanKey[0], Anum_pg_constraint_contypid, */
-	/*			BTEqualStrategyNumber, F_CHAREQ, */
-	/*			CharGetDatum(CONSTRAINT_FOREIGN)); */
-	/*TODO */
-	fkeyRel = heap_open(ConstraintRelationId, AccessShareLock);
-	fkeyScan = systable_beginscan(fkeyRel, ConstraintRelidIndexId, true,
-								  NULL, 0, NULL);
+	pgConstraint = heap_open(ConstraintRelationId, AccessShareLock);
 
-	while (HeapTupleIsValid(tuple = systable_getnext(fkeyScan)))
+	ScanKeyInit(&scanKey[0], Anum_pg_constraint_contype, BTEqualStrategyNumber, F_CHAREQ,
+				CharGetDatum(CONSTRAINT_FOREIGN));
+	scanDescriptor = systable_beginscan(pgConstraint, InvalidOid, false,
+										NULL, scanKeyCount, scanKey);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scanDescriptor)))
 	{
 		Form_pg_constraint constraintForm = (Form_pg_constraint) GETSTRUCT(tuple);
 		FRelEdge *currentFRelEdge = NULL;
-
-		if (constraintForm->contype != CONSTRAINT_FOREIGN)
-		{
-			continue;
-		}
 
 		currentFRelEdge = palloc(sizeof(FRelEdge));
 		currentFRelEdge->referencingRelationOID = constraintForm->conrelid;
@@ -451,8 +446,8 @@ PopulateAdjacencyLists(void)
 		prevReferencedOid = currentFRelEdge->referencedRelationOID;
 	}
 
-	systable_endscan(fkeyScan);
-	heap_close(fkeyRel, AccessShareLock);
+	systable_endscan(scanDescriptor);
+	heap_close(pgConstraint, AccessShareLock);
 }
 
 
