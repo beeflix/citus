@@ -186,6 +186,7 @@ static bool HasOverlappingShardInterval(ShardInterval **shardIntervalArray,
 static void InitializeCaches(void);
 static void InitializeDistTableCache(void);
 static void InitializeWorkerNodeCache(void);
+static void RegisterForeignKeyGraphCacheCallbacks(void);
 static void RegisterWorkerNodeCacheCallbacks(void);
 static void RegisterLocalGroupIdCacheCallbacks(void);
 static uint32 WorkerNodeHashCode(const void *key, Size keySize);
@@ -2525,6 +2526,7 @@ InitializeCaches(void)
 		}
 
 		InitializeDistTableCache();
+		RegisterForeignKeyGraphCacheCallbacks();
 		RegisterWorkerNodeCacheCallbacks();
 		RegisterLocalGroupIdCacheCallbacks();
 	}
@@ -2572,8 +2574,6 @@ InitializeDistTableCache(void)
 
 	/* Watch for invalidation events. */
 	CacheRegisterRelcacheCallback(InvalidateDistRelationCacheCallback,
-								  (Datum) 0);
-	CacheRegisterRelcacheCallback(InvalidateForeignRelationGraphCacheCallback,
 								  (Datum) 0);
 }
 
@@ -2715,6 +2715,19 @@ InitializeWorkerNodeCache(void)
 	WorkerNodeCount = newWorkerNodeCount;
 	WorkerNodeArray = newWorkerNodeArray;
 	WorkerNodeHash = newWorkerNodeHash;
+}
+
+
+/*
+ * RegisterForeignKeyGraphCacheCallbacks registers callbacks required for
+ * the foreign key graph cache.
+ */
+static void
+RegisterForeignKeyGraphCacheCallbacks(void)
+{
+	/* Watch for invalidation events. */
+	CacheRegisterRelcacheCallback(InvalidateForeignRelationGraphCacheCallback,
+								  (Datum) 0);
 }
 
 
@@ -2953,6 +2966,25 @@ InvalidateForeignRelationGraphCacheCallback(Datum argument, Oid relationId)
 		SetForeignKeyGraphInvalid();
 		InvalidateEntireDistCache();
 	}
+}
+
+
+/*
+ * InvalidateForeignKeyGraph is used to invalidate the cached foreign key
+ * graph (see FRelGraph @ ddl/foreign_constraint.c).
+ *
+ * To invalidate the foreign key graph, we hack around relcache invalidation
+ * callbacks. Given that there is no metadata table associated with the foreign
+ * key graph cache, we use pg_dist_colocation, which is never invalidated for
+ * other purposes.
+ *
+ * We acknowledge that it is not a very intiutive way of implementing this cache
+ * invalidation, but, seems acceptable for now.
+ */
+void
+InvalidateForeignKeyGraph(void)
+{
+	CitusInvalidateRelcacheByRelid(DistColocationRelationId());
 }
 
 

@@ -778,7 +778,7 @@ EnsureRelationCanBeDistributed(Oid relationId, Var *distributionColumn,
 
 	if (TableReferenced(relationId) || TableReferencing(relationId))
 	{
-		CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+		InvalidateForeignKeyGraph();
 	}
 
 	relation_close(relation, NoLock);

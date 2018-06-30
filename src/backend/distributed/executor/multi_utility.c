@@ -568,7 +568,7 @@ multi_ProcessUtility(PlannedStmt *pstmt,
 					constraint = (Constraint *) command->def;
 					if (ConstraintIsAForeignKey(constraint->conname, relationId))
 					{
-						CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+						InvalidateForeignKeyGraph();
 					}
 				}
 			}
@@ -2257,7 +2257,7 @@ ErrorIfUnsupportedAlterTableStmt(AlterTableStmt *alterTableStatement)
 
 				if (ConstraintIsAForeignKey(command->name, relationId))
 				{
-					CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+					InvalidateForeignKeyGraph();
 				}
 
 				break;
@@ -3776,7 +3776,7 @@ ProcessDropTableStmt(DropStmt *dropTableStatement)
 		/* invalidate foreign key cache if the table involved in any foreign key */
 		if ((TableReferenced(relationId) || TableReferencing(relationId)))
 		{
-			CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+			InvalidateForeignKeyGraph();
 		}
 
 		/* we're only interested in partitioned and mx tables */
