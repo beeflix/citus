@@ -3767,10 +3767,20 @@ ProcessDropTableStmt(DropStmt *dropTableStatement)
 
 		Oid relationId = RangeVarGetRelid(tableRangeVar, AccessShareLock, missingOK);
 
-		if (relationId == InvalidOid ||
-			!IsDistributedTable(relationId) ||
-			!ShouldSyncTableMetadata(relationId) ||
-			!PartitionedTable(relationId))
+		/* we're not interested in non-valid, non-distributed relations */
+		if (relationId == InvalidOid || !IsDistributedTable(relationId))
+		{
+			continue;
+		}
+
+		/* invalidate foreign key cache if the table involved in any foreign key */
+		if ((TableReferenced(relationId) || TableReferencing(relationId)))
+		{
+			CitusInvalidateRelcacheByRelid(DistColocationRelationId());
+		}
+
+		/* we're only interested in partitioned and mx tables */
+		if (!ShouldSyncTableMetadata(relationId) || !PartitionedTable(relationId))
 		{
 			continue;
 		}
