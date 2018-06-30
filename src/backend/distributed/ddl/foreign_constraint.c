@@ -36,7 +36,7 @@
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
-#include "libpq/libpq-be.h"
+
 
 /*
  * FRelGraph holds the graph data structure for foreign key relation between
